@@ -1,0 +1,309 @@
+#!/usr/bin/env python
+# **********************************************************************
+#
+# dep - dependency
+# rive - to tear apart, tear into pieces
+#
+##COPYRIGHT
+# Copyright (C) 2012, Lars J. Aas <lars.j.aas@gmail.com>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+##
+#
+##VERSION
+# deprive v0.5
+##
+#
+##USAGE
+# Usage: deprive [options]...
+#   -h | -? | --help
+#   -v | --version
+#   --copyright
+#   --usage
+#   --examples
+#   --analyze
+#   --database <pyfile>
+#   --merge
+#   --stdin
+#-
+#-  --output=<python|dot|list|make|scons>
+#-  --group=<object|directory>
+#-  --input=<objects|python>
+#-  --levels=<N>
+#-  --stat
+#-  --regex=<>
+#-
+##
+#
+##HELP
+# Deprive is a utility for analyzing object file link dependencies.
+# It can be useful when you work on cleaning up and refactoring legacy
+# codebases with a lot of spaghetti code.
+#
+# Run 'deprive --usage' for information about command options.
+##
+#
+##EXAMPLES
+# Analyze object dependencies and store them in 'deps.py':
+#   $ find build/ -name "*.o" | deprive --database deps.py --stdin --analyze
+##
+#
+# Author:
+#   Lars J. Aas <lars.j.aas@gmail.com>
+#
+##TODO
+# - make config part of calls or make classes with config member
+##
+# **********************************************************************
+
+import os, sys, platform, commands, runpy
+
+config = {}
+control = {}
+
+def GetConfig(program):
+    config = {
+        'program': program,
+        'system': platform.system().lower(),
+        'defined': '',
+        'undefined': '',
+    }
+
+    if config['system'] == 'darwin':
+        config['defs'] = 'nm -gjU {0}'
+        config['refs'] = 'nm -gju {0}'
+
+    elif config['system'] == 'linux':
+        config['defs'] = 'nm -g --defined-only {0} | cut -c20-'
+        config['refs'] = 'nm -g --undefined-only {0} | cut -c20-'
+
+    else:
+        print config['program'] + ': error: do not know this system.'
+        exit(-1)
+
+    return config
+
+def PrintHereDocument(script, block):
+    file = open(script)
+    inblock = False
+    while 1:
+        line = file.readline().strip()
+        if not line:
+            break
+        if inblock:
+            if line == '##':
+                break
+            elif line.startswith('#-'):
+                pass
+            else:
+                print line[2:]
+        else:
+            if line == '##' + block.upper():
+                inblock = True
+    file.close()
+
+# **************************************************************************
+# Dependencies
+
+class Dependencies(object):
+    def __init__(self):
+        self.dependencies = {}
+
+    def analyze(self, paths):
+        sym2obj = {}
+        sym2objkeys = []
+        deps = self.dependencies
+        for path in paths:
+            if not os.path.exists(path) or os.path.isdir(path):
+                print 'warning: no file "{0}".'.format(path)
+                paths.remove(path)
+
+        for file in paths:
+            # print 'Finding exports for "{0}".'.format(file)
+            command = config['defs'].format(file)
+            symbols = commands.getoutput(command)
+            for symbol in symbols.split('\n'):
+                sym2obj[symbol] = file
+                sym2objkeys += [ symbol ]
+
+        depskeys = deps.keys()
+        # my god, this part is slow...
+        for file in paths:
+            # print 'Finding imports for "{0}".'.format(file)
+            command = config['refs'].format(file)
+            symbols = commands.getoutput(command)
+            for symbol in symbols.split('\n'):
+                if symbol in sym2objkeys:
+                    if file in depskeys:
+                        if not sym2obj[symbol] in deps[file]:
+                            deps[file] += [ sym2obj[symbol] ]
+                    else:
+                        deps[file] = [ sym2obj[symbol] ]
+                        depskeys += [ file ]
+                # else: undefined reference could go to lib
+
+        self.dependencies = deps
+
+    def load(self, filename):
+        name = 'hei'
+        pycode = runpy.run_path(filename)
+        self.dependencies = pycode['getDependencies']()
+
+    def save(self, filename):
+        f = 0
+        if filename == '-':
+            f = sys.stdout
+        else:
+            f = open(filename, 'w')
+
+        funcname = 'getDependencies'
+        f.write('def {0}():\n'.format(funcname))
+        f.write('    deps = {\n')
+        for key in sorted(self.dependencies.keys()):
+            f.write('        \'{0}\': [\n'.format(key))
+            for value in sorted(self.dependencies[key]):
+                f.write('            \'{0}\',\n'.format(value))
+            f.write('        ],\n')
+        f.write('    }\n')
+        f.write('    return deps\n')
+
+    def get(self):
+        print 'Dependencies.get()'
+        return self.dependencies
+
+# **********************************************************************
+
+def main():
+    config = GetConfig(sys.argv[0])
+
+    longopts = {
+        '-?': '--help',
+        '-h': '--help',
+        '-v': '--version',
+    }
+
+    heredocs = [
+        '--version',
+        '--copyright',
+        '--usage',
+        '--help',
+        '--examples',
+    ]
+
+    restargs = []
+    usestdin = False
+    format = 'python'
+
+    config['database'] = ''
+
+    control['mode'] = 'nop'
+    control['args'] = 'cmdline'
+
+    control['load'] = False
+    control['analyze'] = False
+    control['save'] = False
+
+    control['stdin'] = False
+    next = 'program'
+    for opt in sys.argv:
+        if next != '':
+            if next == 'restargs':
+                restargs += [ opt ]
+                continue
+
+            elif next == 'database':
+                config['database'] = opt
+
+            elif next == 'program':
+                config['programpath'] = opt
+
+            next = ''
+            continue
+
+        if opt.startswith('-'):
+            if opt.startswith('--'):
+                pass
+
+            elif opt in longopts.keys():
+                opt = longopts[opt]
+
+            else:
+                print 'error: unknown option "' + opt + '".\n'
+                exit(1)
+
+        if opt.startswith('--'):
+            if opt in heredocs:
+                PrintHereDocument(config['program'], opt[2:])
+                exit(0)
+
+            elif opt == '--':
+                next = 'restargs'
+
+            elif opt == '--database':
+                next = 'database'
+
+            elif opt == '--analyze':
+                control['mode'] = 'analyze'
+                control['analyze'] = True
+                control['save'] = True
+
+            elif opt == '--stdin':
+                control['stdin'] = True
+
+            elif opt == '--merge':
+                control['load'] = True
+
+            else:
+                print 'error: unknown long-option "' + opt + '".\n'
+                exit(1)
+
+        else:
+            restargs += [ opt ]
+
+# **************************************************************************
+
+    dependencies = Dependencies()
+
+    if control['stdin']:
+        print 'Reading from stdin.'
+        restargs = sys.stdin.readlines()
+        i = 0
+        count = len(restargs)
+        while i < count:
+            restargs[i] = restargs[i].strip()
+            i += 1
+
+        print 'Got {0} args.'.format(len(restargs))
+
+    # database update first
+    if control['load']:
+        if config['database'] != '':
+            dependencies.load(config['database'])
+
+    if control['analyze']:
+        if config['database'] != '':
+            dependencies.analyze(restargs)
+            restargs = []
+
+    if control['save']:
+        if config['database'] != '':
+            dependencies.save(config['database'])
+
+    # ...
+
+# config = GetConfig(sys.argv[0])
+
+if __name__ == '__main__':
+    main()
+
+# vim: ft=python:shiftwidth=4
