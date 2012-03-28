@@ -68,7 +68,6 @@
 
 import os, sys, platform, commands, runpy
 
-config = {}
 control = {}
 
 def GetConfig(program):
@@ -119,7 +118,7 @@ class Dependencies(object):
     def __init__(self):
         self.dependencies = {}
 
-    def analyze(self, paths):
+    def analyze(self, config, paths):
         sym2obj = {}
         sym2objkeys = []
         deps = self.dependencies
@@ -292,7 +291,7 @@ def main():
 
     if control['analyze']:
         if config['database'] != '':
-            dependencies.analyze(restargs)
+            dependencies.analyze(config, restargs)
             restargs = []
 
     if control['save']:
