@@ -1,1 +1,13 @@
 deprive - an object file link dependency analysis tool
+
+When refactoring or working on design-related issues on large-scale C/C++ projects,
+knowing the inter-dependencies between the components in the overall system is very
+important.  This tool is designed to help you get various views of those dependencies.
+
+The first step is to do an object file scan.  This process can take some time.  The
+resulting data from this scan should therefore be stored so it can be loaded on later
+invokations.
+
+When you have scanned the object files, you can start doing interesting things.  But
+first you have to wait for me to port that functionality over from some write-once perl
+I once wrote...
