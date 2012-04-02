@@ -9,5 +9,5 @@ resulting data from this scan should therefore be stored so it can be loaded on 
 invokations.
 
 When you have scanned the object files, you can start doing interesting things.  But
-first you have to wait for me to port that functionality over from some write-once perl
-I once wrote...
+first you have to wait for me to port that functionality over from some write-once
+perl I once wrote...
