@@ -78,6 +78,7 @@ def GetConfig(program):
         'undefined': '',
     }
 
+    # TODO: for cygwin/windows, add objdump or dumpbin support
     if config['system'] == 'darwin':
         config['defs'] = 'nm -gjU {0}'
         config['refs'] = 'nm -gju {0}'
@@ -154,7 +155,6 @@ class Dependencies(object):
         self.dependencies = deps
 
     def load(self, filename):
-        name = 'hei'
         pycode = runpy.run_path(filename)
         self.dependencies = pycode['getDependencies']()
 
