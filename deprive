@@ -35,6 +35,7 @@
 #   --database <pyfile>
 #   --merge
 #   --stdin
+#   --trace <object>
 #-
 #-  --output=<python|dot|list|make|scons>
 #-  --group=<object|directory>
@@ -55,7 +56,11 @@
 #
 ##EXAMPLES
 # Analyze object dependencies and store them in 'deps.py':
+#   $ deprive --database deps.py --analyze */*.o
+#
+# Use --stdin if the file list might be too long even for xargs:
 #   $ find build/ -name "*.o" | deprive --database deps.py --stdin --analyze
+#
 ##
 #
 # Author:
@@ -118,6 +123,7 @@ def PrintHereDocument(script, block):
 class Dependencies(object):
     def __init__(self):
         self.dependencies = {}
+        self.funcname = 'getDependencies'
 
     def analyze(self, config, paths):
         sym2obj = {}
@@ -156,29 +162,68 @@ class Dependencies(object):
 
     def load(self, filename):
         pycode = runpy.run_path(filename)
-        self.dependencies = pycode['getDependencies']()
+        if self.funcname in pycode:
+            self.dependencies = pycode[self.funcname]()
+        else:
+            print 'error: {0} not a dependency database.'.format(filename)
 
     def save(self, filename):
-        f = 0
         if filename == '-':
-            f = sys.stdout
+            self.output(sys.stdout, self.dependencies)
         else:
             f = open(filename, 'w')
+            self.output(f, self.dependencies)
+            close(f)
 
-        funcname = 'getDependencies'
-        f.write('def {0}():\n'.format(funcname))
-        f.write('    deps = {\n')
-        for key in sorted(self.dependencies.keys()):
-            f.write('        \'{0}\': [\n'.format(key))
-            for value in sorted(self.dependencies[key]):
-                f.write('            \'{0}\',\n'.format(value))
-            f.write('        ],\n')
-        f.write('    }\n')
-        f.write('    return deps\n')
+    def output(self, stream, deps):
+        stream.write('def {0}():\n'.format(self.funcname))
+        stream.write('    deps = {\n')
+        for key in sorted(deps.keys()):
+            stream.write('        \'{0}\': [\n'.format(key))
+            for value in sorted(deps[key]):
+                stream.write('            \'{0}\',\n'.format(value))
+            stream.write('        ],\n')
+        stream.write('    }\n')
+        stream.write('    return deps\n')
 
     def get(self):
-        print 'Dependencies.get()'
         return self.dependencies
+
+    def trace(self, source, levels = False):
+        found = False
+        for key in self.dependencies.keys():
+            if key.endswith(source):
+                found = key
+        if not found:
+            print 'key {0} not found.'.format(source)
+            return
+
+        deps = {}
+        if not levels:
+            deps[found] = self.dependencies[found]
+            incoming = deps[found]
+            for key in incoming:
+                if not key in deps.keys():
+                    if not key in self.dependencies.keys():
+                        deps[key] = []
+                    else:
+                        deps[key] = self.dependencies[key]
+                        incoming += deps[key]
+        else:
+            deps[found] = self.dependencies[found]
+            thislevel = deps[found]
+            nextlevel = []
+            # FIXME: implement looping level by level
+            exit(1)
+            #while levels > 1:
+            #    levels -= 1
+            #    for key in incoming:
+            #        if not key in deps.keys():
+
+        self.output(sys.stdout, deps)
+        return deps
+
+# **********************************************************************
 
 # **********************************************************************
 
@@ -211,6 +256,7 @@ def main():
     control['load'] = False
     control['analyze'] = False
     control['save'] = False
+    control['trace'] = False
 
     control['stdin'] = False
     next = 'program'
@@ -222,6 +268,9 @@ def main():
 
             elif next == 'database':
                 config['database'] = opt
+
+            elif next == 'trace':
+                control['trace'] = opt
 
             elif next == 'program':
                 config['programpath'] = opt
@@ -251,6 +300,9 @@ def main():
             elif opt == '--database':
                 next = 'database'
 
+            elif opt == '--trace':
+                next = 'trace'
+
             elif opt == '--analyze':
                 control['mode'] = 'analyze'
                 control['analyze'] = True
@@ -269,6 +321,9 @@ def main():
         else:
             restargs += [ opt ]
 
+    if not control['analyze']:
+        control['load'] = True
+
 # **************************************************************************
 
     dependencies = Dependencies()
@@ -282,7 +337,7 @@ def main():
             restargs[i] = restargs[i].strip()
             i += 1
 
-        print 'Got {0} args.'.format(len(restargs))
+        # print 'Got {0} args.'.format(len(restargs))
 
     # database update first
     if control['load']:
@@ -298,9 +353,9 @@ def main():
         if config['database'] != '':
             dependencies.save(config['database'])
 
-    # ...
-
-# config = GetConfig(sys.argv[0])
+    if control['trace']:
+        deps = dependencies.trace(control['trace'])
+        dependencies.output(sys.stdout, deps)
 
 if __name__ == '__main__':
     main()
