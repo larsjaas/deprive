@@ -39,11 +39,12 @@
 #   --trace <object>
 #   --format=<list|tree|python>
 #   --list --tree --python
+#   --levels=<N>
+#   --prefix=<prefix>
 #-
 #-  --output=<python|dot|list|make|scons>
 #-  --group=<object|directory>
 #-  --input=<objects|python>
-#-  --levels=<N>
 #-  --stat
 #-  --regex=<>
 #-
@@ -83,6 +84,7 @@ import sys, os, platform, commands, imp, string
 #     exit(1)
 
 control = {}
+prefix = ''
 entry = '%ENTRY%'
 
 def GetConfig(program):
@@ -137,36 +139,46 @@ class Dependencies(object):
 
     def analyze(self, config, paths):
         sym2obj = {}
-        sym2objkeys = []
         deps = self.dependencies
         for path in paths:
             if not os.path.exists(path) or os.path.isdir(path):
-                print 'warning: no file "{0}".'.format(path)
+                sys.stderr.write('warning: no file "{0}".'.format(path))
                 paths.remove(path)
 
+        maxindex = len(paths)
+        index = 0
         for file in paths:
-            # print 'Finding exports for "{0}".'.format(file)
-            command = config['defs'].format(file)
-            symbols = commands.getoutput(command)
-            for symbol in symbols.split('\n'):
-                sym2obj[symbol] = file
-                sym2objkeys += [ symbol ]
+            handle = file
+            if file.startswith(config['prefix']):
+                handle = file[len(config['prefix']):]
 
-        depskeys = deps.keys()
-        # my god, this part is slow...
-        for file in paths:
+            index = index + 1
             if config['verbose']:
-                print 'Finding imports for "{0}".'.format(file)
+                sys.stdout.write('Finding exports for {0} ({1}/{2}).\n'.\
+                                 format(handle, index, maxindex))
+            command = config['defs'].format(file)
+            for symbol in commands.getoutput(command).split('\n'):
+                sym2obj[symbol] = handle
+
+        # my god, this part is slow...
+        index = 0
+        for file in paths:
+            handle = file
+            if file.startswith(config['prefix']):
+                handle = file[len(config['prefix']):]
+
+            index = index + 1
+            if config['verbose']:
+                sys.stdout.write('Analyzing imports for {0} ({1}/{2}).\n'.\
+                                 format(handle, index, maxindex))
             command = config['refs'].format(file)
-            symbols = commands.getoutput(command)
-            for symbol in symbols.split('\n'):
-                if symbol in sym2objkeys:
-                    if file in depskeys:
-                        if not sym2obj[symbol] in deps[file]:
-                            deps[file] += [ sym2obj[symbol] ]
+            for symbol in commands.getoutput(command).split('\n'):
+                if symbol in sym2obj:
+                    if handle in deps:
+                        if not sym2obj[symbol] in deps[handle]:
+                            deps[handle].append(sym2obj[symbol])
                     else:
-                        deps[file] = [ sym2obj[symbol] ]
-                        depskeys += [ file ]
+                        deps[handle] = [ sym2obj[symbol] ]
                 # else: undefined reference could go to lib
 
         self.dependencies = deps
@@ -400,6 +412,9 @@ def main():
                     print 'error: unknown format "{0}" for --output.\n'
                     exit(1)
 
+            elif opt.startswith('--prefix='):
+                config['prefix'] = opt.split('=', 1)[1]
+
             else:
                 print 'error: unknown long-option "' + opt + '".\n'
                 exit(1)
@@ -425,7 +440,8 @@ def main():
             restargs[i] = restargs[i].strip()
             i += 1
 
-        # print 'Got {0} args.'.format(len(restargs))
+        if config['verbose']:
+            print 'Got {0} objects.'.format(len(restargs))
 
     # database update first
     if control['load']:
