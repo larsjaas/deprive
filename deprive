@@ -21,21 +21,24 @@
 ##
 #
 ##VERSION
-# deprive v0.5
+# deprive v0.6
 ##
 #
 ##USAGE
 # Usage: deprive [options]...
 #   -h | -? | --help
-#   -v | --version
+#   -v | --verbose
 #   --copyright
 #   --usage
 #   --examples
+#   --version
 #   --analyze
 #   --database <pyfile>
 #   --merge
 #   --stdin
 #   --trace <object>
+#   --format=<list|tree|python>
+#   --list --tree --python
 #-
 #-  --output=<python|dot|list|make|scons>
 #-  --group=<object|directory>
@@ -68,12 +71,19 @@
 #
 ##TODO
 # - make config part of calls or make classes with config member
+# - store symbols data to be able to avoid object file scan when debugging
+#   reference building
 ##
 # **********************************************************************
 
-import os, sys, platform, commands, runpy
+import sys, os, platform, commands, imp, string
+
+# if sys.version_info[:2] <= (2, 6):
+#     sys.stderr.write('error: deprive requires python 2.X or later\n')
+#     exit(1)
 
 control = {}
+entry = '%ENTRY%'
 
 def GetConfig(program):
     config = {
@@ -98,8 +108,8 @@ def GetConfig(program):
 
     return config
 
-def PrintHereDocument(script, block):
-    file = open(script)
+def PrintHereDocument(filename, block):
+    file = open(filename)
     inblock = False
     while 1:
         line = file.readline().strip()
@@ -145,7 +155,8 @@ class Dependencies(object):
         depskeys = deps.keys()
         # my god, this part is slow...
         for file in paths:
-            # print 'Finding imports for "{0}".'.format(file)
+            if config['verbose']:
+                print 'Finding imports for "{0}".'.format(file)
             command = config['refs'].format(file)
             symbols = commands.getoutput(command)
             for symbol in symbols.split('\n'):
@@ -161,24 +172,28 @@ class Dependencies(object):
         self.dependencies = deps
 
     def load(self, filename):
-        pycode = runpy.run_path(filename)
-        if self.funcname in pycode:
-            self.dependencies = pycode[self.funcname]()
+        module = imp.new_module('database')
+        module.__file__ = filename
+        execfile(filename, module.__dict__)
+        if self.funcname in module.__dict__:
+            self.dependencies = module.getDependencies()
         else:
             print 'error: {0} not a dependency database.'.format(filename)
 
     def save(self, filename):
         if filename == '-':
-            self.output(sys.stdout, self.dependencies)
+            self.output(self.dependencies)
         else:
             f = open(filename, 'w')
-            self.output(f, self.dependencies)
-            close(f)
+            self.output(self.dependencies, f)
+            f.close()
 
-    def output(self, stream, deps):
+    def output(self, deps, stream = sys.stdout):
         stream.write('def {0}():\n'.format(self.funcname))
         stream.write('    deps = {\n')
         for key in sorted(deps.keys()):
+            if key == entry:
+                continue
             stream.write('        \'{0}\': [\n'.format(key))
             for value in sorted(deps[key]):
                 stream.write('            \'{0}\',\n'.format(value))
@@ -191,39 +206,88 @@ class Dependencies(object):
 
     def trace(self, source, levels = False):
         found = False
-        for key in self.dependencies.keys():
+        for key in self.dependencies:
             if key.endswith(source):
                 found = key
         if not found:
             print 'key {0} not found.'.format(source)
             return
 
-        deps = {}
+        deps = {
+                entry: [ found, ],
+        }
         if not levels:
             deps[found] = self.dependencies[found]
             incoming = deps[found]
-            for key in incoming:
-                if not key in deps.keys():
-                    if not key in self.dependencies.keys():
-                        deps[key] = []
+            i = 0
+            while i < len(incoming):
+                obj = incoming[i]
+                if not obj in deps:
+                    if obj in self.dependencies:
+                        deps[obj] = self.dependencies[obj]
+                        for item in deps[obj]:
+                            if item not in incoming:
+                                incoming.append(item)
                     else:
-                        deps[key] = self.dependencies[key]
-                        incoming += deps[key]
+                        deps[obj] = []
+                i = i + 1
+
         else:
             deps[found] = self.dependencies[found]
             thislevel = deps[found]
             nextlevel = []
-            # FIXME: implement looping level by level
             exit(1)
+            # FIXME: implement looping level by level
             #while levels > 1:
             #    levels -= 1
             #    for key in incoming:
-            #        if not key in deps.keys():
+            #        if not key in deps:
 
-        self.output(sys.stdout, deps)
         return deps
 
 # **********************************************************************
+
+def ListOutput(dependencies, array, current, stream = sys.stdout):
+    if current != entry:
+        array.append(current)
+
+    if current in dependencies:
+        for dependency in dependencies[current]:
+            if dependency not in array:
+                ListOutput(dependencies, array, dependency)
+
+    if current == entry:
+        for item in sorted(array):
+            stream.write(item + '\n')
+
+def TreeOutput(dependencies, stack, current, \
+               indent = '', stream = sys.stdout, flags = [False]):
+
+    if len(flags) > 1 and flags[len(flags)-2]:
+        i = len(indent) - 4
+        if indent[i] == '|':
+          indent = indent[0:i] + ' ' + indent[i+1:]
+
+    if current in stack:
+        stream.write(indent + ' [' + current + ']\n')
+        return
+
+    newstack = stack + [ current ]
+    if indent == '':
+        stream.write('.' + current + '\n')
+    else:
+        stream.write(indent + ' ' + current + '\n')
+    newindent = indent.translate(string.maketrans('-+', ' |')) + '+-'
+    if current in dependencies:
+        for dependency in dependencies[current]:
+            flag = False
+            if dependency == dependencies[current][len(dependencies[current])-1]:
+                flag = True
+            newflags = flags + [ flag ]
+            TreeOutput(dependencies, newstack, dependency,
+                       indent=newindent,
+                       stream=stream,
+                       flags=newflags)
 
 # **********************************************************************
 
@@ -233,7 +297,13 @@ def main():
     longopts = {
         '-?': '--help',
         '-h': '--help',
-        '-v': '--version',
+        '-v': '--verbose',
+    }
+
+    aliases = {
+        '--tree': '--format=tree',
+        '--list': '--format=list',
+        '--python': '--format=python',
     }
 
     heredocs = [
@@ -249,6 +319,7 @@ def main():
     format = 'python'
 
     config['database'] = ''
+    config['verbose'] = False
 
     control['mode'] = 'nop'
     control['args'] = 'cmdline'
@@ -257,6 +328,7 @@ def main():
     control['analyze'] = False
     control['save'] = False
     control['trace'] = False
+    control['output'] = False
 
     control['stdin'] = False
     next = 'program'
@@ -282,7 +354,7 @@ def main():
             if opt.startswith('--'):
                 pass
 
-            elif opt in longopts.keys():
+            elif opt in longopts:
                 opt = longopts[opt]
 
             else:
@@ -290,6 +362,9 @@ def main():
                 exit(1)
 
         if opt.startswith('--'):
+            if opt in aliases:
+                opt = aliases[opt]
+
             if opt in heredocs:
                 PrintHereDocument(config['program'], opt[2:])
                 exit(0)
@@ -303,6 +378,9 @@ def main():
             elif opt == '--trace':
                 next = 'trace'
 
+            elif opt == '--verbose':
+                config['verbose'] = True
+
             elif opt == '--analyze':
                 control['mode'] = 'analyze'
                 control['analyze'] = True
@@ -313,6 +391,14 @@ def main():
 
             elif opt == '--merge':
                 control['load'] = True
+
+            elif opt.startswith('--format='):
+                outputformat = opt.split('=', 1)[1]
+                if outputformat in ['list', 'tree', 'python', 'digraph']:
+                    control['output'] = outputformat
+                else:
+                    print 'error: unknown format "{0}" for --output.\n'
+                    exit(1)
 
             else:
                 print 'error: unknown long-option "' + opt + '".\n'
@@ -329,7 +415,9 @@ def main():
     dependencies = Dependencies()
 
     if control['stdin']:
-        print 'Reading from stdin.'
+        if config['verbose']:
+            print 'Reading from stdin.'
+
         restargs = sys.stdin.readlines()
         i = 0
         count = len(restargs)
@@ -353,9 +441,22 @@ def main():
         if config['database'] != '':
             dependencies.save(config['database'])
 
+    deps = {}
     if control['trace']:
         deps = dependencies.trace(control['trace'])
-        dependencies.output(sys.stdout, deps)
+
+    if control['output']:
+        if control['output'] == 'list':
+            ListOutput(deps, [], entry)
+
+        if control['output'] == 'tree':
+            TreeOutput(deps, [], deps[entry][0])
+
+        if control['output'] == 'python':
+            dependencies.output(deps)
+
+        if control['output'] == 'digraph':
+            pass
 
 if __name__ == '__main__':
     main()
