@@ -1,13 +1,42 @@
 deprive - an object file link dependency analysis tool
 
-When refactoring or working on design-related issues on large-scale C/C++ projects,
-knowing the inter-dependencies between the components in the overall system is very
-important.  This tool is designed to help you get various views of those dependencies.
+When refactoring or working on design-related issues on large-scale C/C++
+projects, knowing the inter-dependencies between the components in the overall
+system is very important.  This tool is designed to help you get various views
+of those dependencies.
 
-The first step is to do an object file scan.  This process can take some time.  The
-resulting data from this scan should therefore be stored so it can be loaded on later
-invokations.
+The first step is to do an object file scan.  This process can take some time.
+The resulting data from this scan should therefore be stored so it can be
+quickly loaded on later invokations.
 
-When you have scanned the object files, you can start doing interesting things.  But
-first you have to wait for me to port that functionality over from some write-once
-perl I once wrote...
+When you have scanned the object files, you can start doing interesting things.
+
+depends-on dependencies
+=======================
+The main thing to do is to trace the full dependency tree from a specific
+object file.  You can output the dependencies as a flat list, an ascii-art
+tree, and even as a python function returning a python dict with the
+dependencies.
+
+If you start the dependency trace on a specific class, you will see the
+dependency tree for that class.  If you start the trace on the program entry
+object file, then you should in theory get a tree containing every object file
+in the program (not including plugins).
+
+A dependency tree branch is stopped as soon as a circular dependency is found.
+The circular reference will be marked by square brackets around the reference
+object path.  You can find circular dependencies this way, if you want to avoid
+those in your designs.  You would typically not want them inbetween libraries
+at least.
+
+If you write unittests as standalone programs, you can use the deprive link
+dependency analysis to get your build files set up with the minimum amount of
+object files for each unit test-suite program.  Trace from the unittest main,
+and use the files listed with the --list option as the test program
+dependencies.
+
+TODO:
+- depended-by dependencies, dependency-levels
+- output of dot digraphs
+- output of makefiles, sconsfiles
+- object grouping
