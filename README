@@ -5,10 +5,9 @@ projects, knowing the inter-dependencies between the components in the overall
 system is very important.  This tool is designed to help you get various views
 of those dependencies.
 
-The first step is to do an object file scan.  This process can take some time.
-The resulting data from this scan should therefore be stored so it can be
-quickly loaded on later invokations.
-
+The first step is to do an object file scan.  The resulting data from this scan
+can be stored so it can be quickly loaded on later invokations.  That way you
+can avoid re-scanning all the object files for each invokation of deprive.
 When you have scanned the object files, you can start doing interesting things.
 
 depends-on dependencies
