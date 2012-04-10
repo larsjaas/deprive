@@ -25,7 +25,7 @@
 ##
 #
 ##USAGE
-# Usage: deprive [options]...
+# Usage: deprive [options] [<files>...]
 #   -h | -? | --help          print help text
 #   --copyright               print the copyright text
 #   --usage                   print usage information
@@ -33,19 +33,22 @@
 #   --version                 print version information
 #   -v | --verbose            enable process output to stderr
 #   --symbols <symbolsdb>     set filename for symbols database
+#                             (default: symbols.py)
 #   --scan                    scan object files for symbols
 #   --stdin                   read object file list from stdin instead of
 #                             command line
 #   --merge                   merge object symbols with existing database
 #                             content
 #   --dependencies <depsdb>   set filename for dependency database
+#                             (default: dependencies.py)
 #-  --compact-db              avoid writing empty dependencies
 #   --analyze                 analyze dependencies and write dependency database
 #   --trace <object>          trace dependency tree for object
 #   --format=<format>         output dependencies as format 'list', 'tree', or
 #                             'python' dict
-#   --list --tree --python
-#-   --format=<list|tree|python|digraph|make|scons>
+#   --list                    output dependencies as format 'list'
+#   --tree                    output dependencies as format 'tree'
+#   --python                  output dependencies as format 'python' dict
 #   --prefix=<prefix>         set object path prefix to ignore
 #-   --levels=<N>
 #-  --group=<object|directory>
@@ -63,11 +66,16 @@
 ##
 #
 ##EXAMPLES
-# Analyze object dependencies and store them in 'deps.py':
-#   $ deprive --database deps.py --analyze */*.o
+# Analyze object symbols and store them in 'syms.py':
+#   $ deprive --symbols syms.py --scan */*.o
+#
+# Analyze object dependencies from the symbols database in syms.py and store
+# the dependencies in 'deps.py':
+#   $ deprive --symbols syms.py --dependencies deps.py \
+#       --analyze */*.o
 #
 # Use --stdin if the file list might be too long even for xargs:
-#   $ find build/ -name "*.o" | deprive --database deps.py --stdin --analyze
+#   $ find build/ -name "*.o" | deprive --stdin --scan --analyze
 #
 ##
 #
@@ -79,7 +87,7 @@
 ##
 # **********************************************************************
 
-import sys, os, platform, commands, imp, string
+import sys, os, platform, commands, imp, string, re
 
 # if sys.version_info[:2] <= (2, 6):
 #     sys.stderr.write('error: deprive requires python 2.X or later\n')
@@ -95,18 +103,25 @@ def GetConfig(program):
         'system': platform.system().lower(),
         'defined': '',
         'undefined': '',
-        'prefix': 'ASDASDFHJSDAKFH',
+        'prefix': ':::',
+        'verbose': False,
+        'defs-cmd': '',
+        'defs-regex': False,
+        'refs-cmd': '',
+        'refs-regex': False,
+        'ignore': [],
     }
 
     # TODO: for cygwin/windows, add objdump or dumpbin support
-    # TODO: integrate the pipe customizations
     if config['system'] == 'darwin':
-        config['defs'] = 'nm -gjU {0}'
-        config['refs'] = 'nm -gju {0}'
+        config['defs-cmd'] = 'nm -gjU {0}'
+        config['refs-cmd'] = 'nm -gju {0}'
 
     elif config['system'] == 'linux':
-        config['defs'] = 'nm -g --defined-only {0} | cut -c20-'
-        config['refs'] = 'nm -g --undefined-only {0} | cut -c20-'
+        config['defs-cmd'] = 'nm -g --defined-only {0}'
+        config['refs-cmd'] = 'nm -g --undefined-only {0}'
+        config['defs-regex'] = re.compile('^.{19}(.*)$')
+        config['refs-regex'] = re.compile('^.{19}(.*)$')
 
     else:
         print config['program'] + ': error: do not know this system.'
@@ -229,8 +244,10 @@ class Dependencies(object):
             if self.config['verbose']:
                 sys.stdout.write('Reading exports for {0} ({1}/{2}).\n'.\
                                  format(handle, index, maxindex))
-            command = self.config['defs'].format(file)
+            command = self.config['defs-cmd'].format(file)
             for symbol in commands.getoutput(command).split('\n'):
+                if self.config['defs-regex']:
+                    symbol = self.config['defs-regex'].sub(r'\1', symbol)
                 self.exports[handle].append(symbol)
             self.exports[handle].sort()
 
@@ -246,8 +263,10 @@ class Dependencies(object):
             if self.config['verbose']:
                 sys.stdout.write('Reading imports for {0} ({1}/{2}).\n'.\
                                  format(handle, index, maxindex))
-            command = self.config['refs'].format(file)
+            command = self.config['refs-cmd'].format(file)
             for symbol in commands.getoutput(command).split('\n'):
+                if self.config['refs-regex']:
+                    symbol = self.config['refs-regex'].sub(r'\1', symbol)
                 self.imports[handle].append(symbol)
             self.imports[handle].sort()
 
@@ -275,7 +294,7 @@ class Dependencies(object):
                 found = key
         if not found:
             print 'key {0} not found.'.format(source)
-            return
+            return None
 
         deps = {
             entry: [ found, ],
@@ -393,9 +412,6 @@ def main():
     ]
 
     restargs = []
-    format = 'python'
-
-    config['verbose'] = False
 
     control['args'] = 'cmdline'
     control['symbols-load'] = False
@@ -406,8 +422,8 @@ def main():
     control['dependencies-save'] = False
     control['trace'] = False
     control['output'] = 'list'
-
     control['stdin'] = False
+
     next = 'program'
     for opt in sys.argv:
         if next != '':
@@ -484,7 +500,8 @@ def main():
                 if outputformat in ['list', 'tree', 'python']:
                     control['output'] = outputformat
                 else:
-                    print 'error: unknown format "{0}" for --output.\n'
+                    sys.stderr.write('error: unknown format "{0}" for --output.\n'.\
+                                     format(outputformat))
                     exit(1)
 
             elif opt.startswith('--prefix='):
@@ -501,7 +518,8 @@ def main():
     if control['analyze'] and not control['symbols-scan']:
         control['symbols-load'] = True
 
-    if control['trace'] and not control['dependencies-load']:
+    if control['trace'] and not control['analyze'] and \
+           not control['dependencies-load']:
         control['dependencies-load'] = True
 
 # **************************************************************************
@@ -549,18 +567,24 @@ def main():
     if control['trace']:
         deps = dependencies.trace(control['trace'])
 
-        if control['output']:
-            if control['output'] == 'list':
-                ListOutput(deps, [], entry)
+        if not control['output']:
+            pass
 
-            elif control['output'] == 'tree':
-                TreeOutput(deps, [], deps[entry][0])
+        elif control['output'] == 'list':
+            ListOutput(deps, [], entry)
 
-            elif control['output'] == 'python':
-                PythonOutput(deps, 'getDependencies')
+        elif control['output'] == 'tree':
+            TreeOutput(deps, [], deps[entry][0])
 
-#            elif control['output'] == 'digraph':
-#                pass
+        elif control['output'] == 'python':
+            PythonOutput(deps, 'getDependencies')
+
+#       elif control['output'] == 'digraph':
+#           pass
+
+        else:
+            sys.stderr.write('error: unknown output option "{0}".\n'. \
+                             format(control['output'])) 
 
 if __name__ == '__main__':
     main()
