@@ -44,11 +44,12 @@
 #-  --compact-db              avoid writing empty dependencies
 #   --analyze                 analyze dependencies and write dependency database
 #   --trace <object>          trace dependency tree for object
-#   --format=<format>         output dependencies as format 'list', 'tree', or
-#                             'python' dict
+#   --format=<format>         output dependencies as format 'list', 'tree',
+#                             'python' dict, or dot 'digraph'.
 #   --list                    output dependencies as format 'list'
 #   --tree                    output dependencies as format 'tree'
 #   --python                  output dependencies as format 'python' dict
+#   --digraph                 output dependencies as format dot 'digraph'
 #   --prefix=<prefix>         set object path prefix to ignore
 #-   --levels=<N>
 #-  --group=<object|directory>
@@ -288,6 +289,7 @@ class Dependencies(object):
             self.dependencies[obj].sort()
 
     def trace(self, source, levels = False):
+        # TODO: fix bug that causes tree to be bogus
         found = False
         for key in self.dependencies:
             if key.endswith(source):
@@ -386,6 +388,32 @@ def PythonOutput(dependencies, funcname, stream = sys.stdout):
     stream.write('    }\n')
     stream.write('    return dict\n')
 
+def DiGraphOutput(dependencies, entry, stream = sys.stdout):
+    def GetName(path):
+        pos = path.rfind('/')
+        if pos != -1:
+            return path[pos+1:]
+        return path
+
+    graphname = dependencies[entry][0]
+    stream.write('digraph "{0}" {1}\n'.format(graphname, '{'))
+    for obj in sorted(dependencies.keys()):
+        if obj == entry:
+            continue
+        if obj == graphname:
+            stream.write('  "{0}" [color=red];\n'.format(GetName(obj)))
+        else:
+            stream.write('  "{0}";\n'.format(GetName(obj)))
+    stream.write('\n')
+
+    for obj in sorted(dependencies.keys()):
+        if obj == entry:
+            continue
+        for dep in dependencies[obj]:
+            stream.write('  "{0}" -> "{1}";\n'.format(GetName(obj), GetName(dep)))
+
+    stream.write('}\n')
+
 # **********************************************************************
 
 def main():
@@ -401,6 +429,7 @@ def main():
         '--tree': '--format=tree',
         '--list': '--format=list',
         '--python': '--format=python',
+        '--digraph': '--format=digraph',
     }
 
     heredocs = [
@@ -497,7 +526,7 @@ def main():
 
             elif opt.startswith('--format='):
                 outputformat = opt.split('=', 1)[1]
-                if outputformat in ['list', 'tree', 'python']:
+                if outputformat in ['list', 'tree', 'python', 'digraph']:
                     control['output'] = outputformat
                 else:
                     sys.stderr.write('error: unknown format "{0}" for --output.\n'.\
@@ -578,6 +607,9 @@ def main():
 
         elif control['output'] == 'python':
             PythonOutput(deps, 'getDependencies')
+
+        elif control['output'] == 'digraph':
+            DiGraphOutput(deps, entry)
 
 #       elif control['output'] == 'digraph':
 #           pass
