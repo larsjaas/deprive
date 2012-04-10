@@ -26,27 +26,31 @@
 #
 ##USAGE
 # Usage: deprive [options]...
-#   -h | -? | --help
-#   -v | --verbose
-#   --copyright
-#   --usage
-#   --examples
-#   --version
-#   --analyze
-#   --database <pyfile>
-#   --merge
-#   --stdin
-#   --trace <object>
-#   --format=<list|tree|python>
+#   -h | -? | --help          print help text
+#   --copyright               print the copyright text
+#   --usage                   print usage information
+#   --example                 print usage exampless
+#   --version                 print version information
+#   -v | --verbose            enable process output to stderr
+#   --symbols <symbolsdb>     set filename for symbols database
+#   --scan                    scan object files for symbols
+#   --stdin                   read object file list from stdin instead of
+#                             command line
+#   --merge                   merge object symbols with existing database
+#                             content
+#   --dependencies <depsdb>   set filename for dependency database
+#-  --compact-db              avoid writing empty dependencies
+#   --analyze                 analyze dependencies and write dependency database
+#   --trace <object>          trace dependency tree for object
+#   --format=<format>         output dependencies as format 'list', 'tree', or
+#                             'python' dict
 #   --list --tree --python
-#   --levels=<N>
-#   --prefix=<prefix>
-#-
-#-  --output=<python|dot|list|make|scons>
+#-   --format=<list|tree|python|digraph|make|scons>
+#   --prefix=<prefix>         set object path prefix to ignore
+#-   --levels=<N>
 #-  --group=<object|directory>
-#-  --input=<objects|python>
+#-  --ignore=<pattern> --filter=<pattern>
 #-  --stat
-#-  --regex=<>
 #-
 ##
 #
@@ -71,9 +75,7 @@
 #   Lars J. Aas <lars.j.aas@gmail.com>
 #
 ##TODO
-# - make config part of calls or make classes with config member
-# - store symbols data to be able to avoid object file scan when debugging
-#   reference building
+# - docstrings
 ##
 # **********************************************************************
 
@@ -93,9 +95,11 @@ def GetConfig(program):
         'system': platform.system().lower(),
         'defined': '',
         'undefined': '',
+        'prefix': 'ASDASDFHJSDAKFH',
     }
 
     # TODO: for cygwin/windows, add objdump or dumpbin support
+    # TODO: integrate the pipe customizations
     if config['system'] == 'darwin':
         config['defs'] = 'nm -gjU {0}'
         config['refs'] = 'nm -gju {0}'
@@ -107,6 +111,9 @@ def GetConfig(program):
     else:
         print config['program'] + ': error: do not know this system.'
         exit(-1)
+
+    config['symbols-db'] = 'symbols.py'
+    config['dependencies-db'] = 'dependencies.py'
 
     return config
 
@@ -133,11 +140,75 @@ def PrintHereDocument(filename, block):
 # Dependencies
 
 class Dependencies(object):
-    def __init__(self):
+    def __init__(self, config):
+        self.imports = {}
+        self.exports = {}
         self.dependencies = {}
-        self.funcname = 'getDependencies'
+        self.config = config
 
-    def analyze(self, config, paths):
+    def load_as_module(self, modulename, filename, required):
+        module = imp.new_module(modulename)
+        module.__file__ = filename
+        try:
+            execfile(filename, module.__dict__)
+        except (RuntimeError):
+            print 'runtime error: could not load {0}.'.format(filename)
+            return None
+        for symbol in required:
+            if not symbol in module.__dict__:
+                print 'error: {0} is not a {1} database.'.\
+                      format(filename, modulename)
+                return None
+        return module
+
+    def syms_load(self, filename):
+        if self.config['verbose']:
+            sys.stderr.write('Loading symbols...\n')
+        module = self.load_as_module('symbols', filename,
+                                     ['getExports', 'getImports'])
+        if module:
+            self.exports = module.getExports()
+            self.imports = module.getImports()
+        if self.config['verbose']:
+            sys.stderr.write('Done.\n')
+
+    def syms_save(self, filename):
+        if self.config['verbose']:
+            sys.stderr.write('Saving symbols...\n')
+        if filename == '-':
+            PythonOutput(self.exports, 'getExports')
+            PythonOutput(self.imports, 'getImports')
+        else:
+            f = open(filename, 'w')
+            PythonOutput(self.exports, 'getExports', f)
+            PythonOutput(self.imports, 'getImports', f)
+            f.close()
+        if self.config['verbose']:
+            sys.stderr.write('Done.\n')
+
+    def deps_load(self, filename):
+        if self.config['verbose']:
+            sys.stderr.write('Loading dependencies...\n')
+        module = self.load_as_module('dependencies', filename,
+                                     ['getDependencies'])
+        if module:
+            self.dependencies = module.getDependencies()
+        if self.config['verbose']:
+            sys.stderr.write('Done.\n')
+
+    def deps_save(self, filename):
+        if self.config['verbose']:
+            sys.stderr.write('Saving dependencies...\n')
+        if filename == '-':
+            PythonOutput(self.dependencies, 'getDependencies')
+        else:
+            f = open(filename, 'w')
+            PythonOutput(self.dependencies, 'getDependencies', f)
+            f.close()
+        if self.config['verbose']:
+            sys.stderr.write('Done.\n')
+
+    def syms_scan(self, paths):
         sym2obj = {}
         deps = self.dependencies
         for path in paths:
@@ -149,72 +220,53 @@ class Dependencies(object):
         index = 0
         for file in paths:
             handle = file
-            if file.startswith(config['prefix']):
-                handle = file[len(config['prefix']):]
+            if file.startswith(self.config['prefix']):
+                handle = file[len(self.config['prefix']):]
+
+            self.exports[handle] = []
 
             index = index + 1
-            if config['verbose']:
-                sys.stdout.write('Finding exports for {0} ({1}/{2}).\n'.\
+            if self.config['verbose']:
+                sys.stdout.write('Reading exports for {0} ({1}/{2}).\n'.\
                                  format(handle, index, maxindex))
-            command = config['defs'].format(file)
+            command = self.config['defs'].format(file)
             for symbol in commands.getoutput(command).split('\n'):
-                sym2obj[symbol] = handle
+                self.exports[handle].append(symbol)
+            self.exports[handle].sort()
 
-        # my god, this part is slow...
         index = 0
         for file in paths:
             handle = file
-            if file.startswith(config['prefix']):
-                handle = file[len(config['prefix']):]
+            if file.startswith(self.config['prefix']):
+                handle = file[len(self.config['prefix']):]
+
+            self.imports[handle] = []
 
             index = index + 1
-            if config['verbose']:
-                sys.stdout.write('Analyzing imports for {0} ({1}/{2}).\n'.\
+            if self.config['verbose']:
+                sys.stdout.write('Reading imports for {0} ({1}/{2}).\n'.\
                                  format(handle, index, maxindex))
-            command = config['refs'].format(file)
+            command = self.config['refs'].format(file)
             for symbol in commands.getoutput(command).split('\n'):
+                self.imports[handle].append(symbol)
+            self.imports[handle].sort()
+
+    def deps_analyze(self):
+        sym2obj = {}
+        for obj in self.exports:
+            for symbol in self.exports[obj]:
+                sym2obj[symbol] = obj
+
+        for obj in self.imports:
+            if not obj in self.dependencies:
+               self.dependencies[obj] = []
+            for symbol in self.imports[obj]:
                 if symbol in sym2obj:
-                    if handle in deps:
-                        if not sym2obj[symbol] in deps[handle]:
-                            deps[handle].append(sym2obj[symbol])
-                    else:
-                        deps[handle] = [ sym2obj[symbol] ]
+                    target = sym2obj[symbol]
+                    if not target in self.dependencies[obj]:
+                        self.dependencies[obj].append(target)
                 # else: undefined reference could go to lib
-
-        self.dependencies = deps
-
-    def load(self, filename):
-        module = imp.new_module('database')
-        module.__file__ = filename
-        execfile(filename, module.__dict__)
-        if self.funcname in module.__dict__:
-            self.dependencies = module.getDependencies()
-        else:
-            print 'error: {0} not a dependency database.'.format(filename)
-
-    def save(self, filename):
-        if filename == '-':
-            self.output(self.dependencies)
-        else:
-            f = open(filename, 'w')
-            self.output(self.dependencies, f)
-            f.close()
-
-    def output(self, deps, stream = sys.stdout):
-        stream.write('def {0}():\n'.format(self.funcname))
-        stream.write('    deps = {\n')
-        for key in sorted(deps.keys()):
-            if key == entry:
-                continue
-            stream.write('        \'{0}\': [\n'.format(key))
-            for value in sorted(deps[key]):
-                stream.write('            \'{0}\',\n'.format(value))
-            stream.write('        ],\n')
-        stream.write('    }\n')
-        stream.write('    return deps\n')
-
-    def get(self):
-        return self.dependencies
+            self.dependencies[obj].sort()
 
     def trace(self, source, levels = False):
         found = False
@@ -226,7 +278,7 @@ class Dependencies(object):
             return
 
         deps = {
-                entry: [ found, ],
+            entry: [ found, ],
         }
         if not levels:
             deps[found] = self.dependencies[found]
@@ -301,6 +353,20 @@ def TreeOutput(dependencies, stack, current, \
                        stream=stream,
                        flags=newflags)
 
+def PythonOutput(dependencies, funcname, stream = sys.stdout):
+    # TODO: option for output'ing entry
+    stream.write('def {0}():\n'.format(funcname))
+    stream.write('    dict = {\n')
+    for key in sorted(dependencies.keys()):
+        if key == entry:
+            continue
+        stream.write('        \'{0}\': [\n'.format(key))
+        for value in sorted(dependencies[key]):
+            stream.write('            \'{0}\',\n'.format(value))
+        stream.write('        ],\n')
+    stream.write('    }\n')
+    stream.write('    return dict\n')
+
 # **********************************************************************
 
 def main():
@@ -327,20 +393,19 @@ def main():
     ]
 
     restargs = []
-    usestdin = False
     format = 'python'
 
-    config['database'] = ''
     config['verbose'] = False
 
-    control['mode'] = 'nop'
     control['args'] = 'cmdline'
-
-    control['load'] = False
+    control['symbols-load'] = False
+    control['symbols-scan'] = False
+    control['symbols-save'] = False
+    control['dependencies-load'] = False
     control['analyze'] = False
-    control['save'] = False
+    control['dependencies-save'] = False
     control['trace'] = False
-    control['output'] = False
+    control['output'] = 'list'
 
     control['stdin'] = False
     next = 'program'
@@ -350,8 +415,11 @@ def main():
                 restargs += [ opt ]
                 continue
 
-            elif next == 'database':
-                config['database'] = opt
+            elif next == 'symbols':
+                config['symbols-db'] = opt
+
+            elif next == 'dependencies':
+                config['dependencies-db'] = opt
 
             elif next == 'trace':
                 control['trace'] = opt
@@ -384,8 +452,11 @@ def main():
             elif opt == '--':
                 next = 'restargs'
 
-            elif opt == '--database':
-                next = 'database'
+            elif opt == '--symbols':
+                next = 'symbols'
+
+            elif opt == '--dependencies':
+                next = 'dependencies'
 
             elif opt == '--trace':
                 next = 'trace'
@@ -393,20 +464,24 @@ def main():
             elif opt == '--verbose':
                 config['verbose'] = True
 
+            elif opt == '--scan':
+                control['symbols-scan'] = True
+                control['symbols-save'] = True
+
             elif opt == '--analyze':
-                control['mode'] = 'analyze'
                 control['analyze'] = True
-                control['save'] = True
+                control['dependencies-save'] = True
 
             elif opt == '--stdin':
-                control['stdin'] = True
+                control['args'] = 'stdin'
 
             elif opt == '--merge':
-                control['load'] = True
+                control['symbols-load'] = True
+                control['dependencies-load'] = True
 
             elif opt.startswith('--format='):
                 outputformat = opt.split('=', 1)[1]
-                if outputformat in ['list', 'tree', 'python', 'digraph']:
+                if outputformat in ['list', 'tree', 'python']:
                     control['output'] = outputformat
                 else:
                     print 'error: unknown format "{0}" for --output.\n'
@@ -422,14 +497,18 @@ def main():
         else:
             restargs += [ opt ]
 
-    if not control['analyze']:
-        control['load'] = True
+    # hook up some implicit functionality
+    if control['analyze'] and not control['symbols-scan']:
+        control['symbols-load'] = True
+
+    if control['trace'] and not control['dependencies-load']:
+        control['dependencies-load'] = True
 
 # **************************************************************************
 
-    dependencies = Dependencies()
+    dependencies = Dependencies(config)
 
-    if control['stdin']:
+    if control['args'] == 'stdin':
         if config['verbose']:
             print 'Reading from stdin.'
 
@@ -444,35 +523,44 @@ def main():
             print 'Got {0} objects.'.format(len(restargs))
 
     # database update first
-    if control['load']:
-        if config['database'] != '':
-            dependencies.load(config['database'])
+    if control['symbols-load']:
+        if config['symbols-db'] != '':
+            dependencies.syms_load(config['symbols-db'])
+
+    if control['symbols-scan']:
+        dependencies.syms_scan(restargs)
+
+    if control['symbols-save']:
+        if config['symbols-db'] != '':
+            dependencies.syms_save(config['symbols-db'])
+
+    if control['dependencies-load']:
+        if config['dependencies-db'] != '':
+            dependencies.deps_load(config['dependencies-db'])
 
     if control['analyze']:
-        if config['database'] != '':
-            dependencies.analyze(config, restargs)
-            restargs = []
+        dependencies.deps_analyze()
 
-    if control['save']:
-        if config['database'] != '':
-            dependencies.save(config['database'])
+    if control['dependencies-save']:
+        if config['dependencies-db'] != '':
+            dependencies.deps_save(config['dependencies-db'])
 
     deps = {}
     if control['trace']:
         deps = dependencies.trace(control['trace'])
 
-    if control['output']:
-        if control['output'] == 'list':
-            ListOutput(deps, [], entry)
+        if control['output']:
+            if control['output'] == 'list':
+                ListOutput(deps, [], entry)
 
-        if control['output'] == 'tree':
-            TreeOutput(deps, [], deps[entry][0])
+            elif control['output'] == 'tree':
+                TreeOutput(deps, [], deps[entry][0])
 
-        if control['output'] == 'python':
-            dependencies.output(deps)
+            elif control['output'] == 'python':
+                PythonOutput(deps, 'getDependencies')
 
-        if control['output'] == 'digraph':
-            pass
+#            elif control['output'] == 'digraph':
+#                pass
 
 if __name__ == '__main__':
     main()
