@@ -30,10 +30,29 @@
 
 <h3>About</h3>
 <p>
-<strong>Deprive</strong> is a command line utility for doing object file
-and library interdependency analysis.  The primary audience for deprive is
-software developers involved in development on large-scale <code>C/C++</code>
+<strong>Deprive</strong> is a command line utility for doing object file and
+library link-time interdependency analysis.  The primary audience for deprive
+is software engineers involved in development on large-scale <code>C/C++</code>
 (and similar languages) software projects.
+</p>
+<p>
+Why should you care about link-time dependencies?  Have you heard about 10
+second builds?  When you don't work on the 10-second compile-link-run cycle,
+you constantly break out of your programming zone, and your productivity
+drops down like you wouldn't believe.  More than 10 seconds of wait time
+before you get your feedback, and you will find that your second monitor is
+mostly filled throughout the day with Reddit and Hacker News.
+</p>
+<p>
+To achieve 10 second builds, you need to be in total control of the link-time
+dependencies in a large software project.  It will influence your architectural
+designs down to the core.  To get there, you need tools like deprive, to tell
+you exactly what you are pulling in of dependencies when you only want to work
+on some miniscule piece of the total system.
+</p>
+<p>
+Once you see the dependencies, you can start detangling them, decoupling them,
+destroying them, depriving them... But that is a topic for another web page.
 </p>
 
 <h3>Basic Usage</h3>
@@ -67,8 +86,8 @@ exact same reason as the first circular dependency mentioned.
 
 <p>
 Beyond detecting circular dependencies, you will also be able to get a decent
-overview over the program flow by looking at the dependency graphs.  If you are
-trying to get an understanding of the architecture in a new codebase, having
+overview of the program flow by looking at the dependency graphs.  If you are
+trying to get an understanding of the architecture of a new codebase, having
 the dependencies visualized in this way can be very beneficial.  Also, if you
 want to refactor something in a large project, looking at dependency graphs can
 give you an idea of how much work it will be to do the wanted refactoring.
@@ -80,7 +99,7 @@ Not all programs are as simple as GNU ls to analyze.  For really large-scale
 projects, it is natural to use a more flexible, dynamic approach for listing
 the object files:
 </p>
-<pre><code>$ find ./build -name "*.o" | xargs deprive --scan --analyze
+<pre><code>$ <font color="yellow">find ./build -name "*.o" | xargs</font> deprive --scan --analyze
 $ deprive --trace main.o --digraph | dot -Tpng - >program.png
 </code></pre>
 <p>
@@ -90,7 +109,7 @@ arguments on stdin, it will split the arguments into groups and do multiple
 invokations of the program it invokes.  This is not supported, so in this case
 you need to let deprive read the file list from stdin instead.
 </p>
-<pre><code>$ find ./build -name "*.o" | deprive --stdin --scan --analyze
+<pre><code>$ find ./build -name "*.o" | deprive <font color="yellow">--stdin</font> --scan --analyze
 $ deprive --trace main.o --digraph | dot -Tpng - >program.png
 </code></pre>
 <p>
@@ -100,7 +119,7 @@ This is why I recommend using the dependency graphs mostly on unittest programs,
 and not for full systems.  For full system analysis, I will implement
 directory-based grouping of object files, but in the mean time you can simply
 link subdirectories to libraries, and instead of scanning object files
-do the scan on the librairy files instead.
+do the scan on the library files instead.
 </p>
 
 <h3>Other Usage</h3>
@@ -116,7 +135,7 @@ This is not totally trivial to do, but I will include some sample code for doing
 it as soon as I get around to it...
 </p>
 
-<h3>A Note About Link Dependencies</h3>
+<h3>A Note About Link-Time Dependencies</h3>
 <p>
 The view you get with deprive is only of link-time dependencies.  There are also
 compile-time dependencies which are completely resolved at compile-time.  You do
@@ -151,6 +170,10 @@ Deprive works on <strong>Linux</strong> and <strong>Mac OS X</strong>.
 Porting to new platforms is just a matter of setting up the symbol-listing
 commands, so if your platform is missing, it should be relatively easy to
 add it.  Search for 'linux' and 'darwin' in the deprive script file...
+</p>
+<p>
+A Windows MSVC port is something I plan to do in the future, but it is not
+a priority right now.
 </p>
 
 </section>
