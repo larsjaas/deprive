@@ -294,6 +294,7 @@ class Dependencies(object):
         for key in self.dependencies:
             if key.endswith(source):
                 found = key
+                break
         if not found:
             print 'key {0} not found.'.format(source)
             return None
